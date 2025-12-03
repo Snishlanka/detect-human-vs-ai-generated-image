@@ -1,0 +1,8 @@
+kagglehub
+pandas
+torch
+torchvision
+scikit-learn
+pillow
+tqdm
+## pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
