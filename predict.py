@@ -7,14 +7,32 @@ from torchvision.models import EfficientNet_B0_Weights
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import logging
+from datetime import datetime
 
 # --- Configuration ---
 TEST_CSV = 'test.csv'
-OUTPUT_FILE = 'submission.csv'
-MODEL_PATH = 'best_model.pth' # Ensure this matches your saved model name
+OUTPUT_FILE = 'submission_version_2.csv'
+MODEL_PATH = 'best_model_version2.pth' 
 BATCH_SIZE = 32
 IMG_SIZE = 224
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Generate a unique log filename based on the current time
+current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+LOG_FILE = f'prediction_log_{current_time}.txt'
+
+# --- 0. Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler(LOG_FILE, mode='w'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # --- 1. Test Dataset Class ---
 class TestDataset(Dataset):
@@ -26,18 +44,13 @@ class TestDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        # The 'id' column contains "test_data_v2/filename.jpg"
         img_path = self.df.iloc[idx]['id']
-        
-        # We use the full path from the CSV as the ID for submission
         img_id = img_path
 
         try:
             image = Image.open(img_path).convert("RGB")
         except Exception as e:
-            # Create a blank image if file is missing to prevent crash
-            # (Prints a warning so you know)
-            print(f"Warning: Could not read {img_path}")
+            logger.warning(f"Could not read {img_path}. Using blank image. Error: {e}")
             image = Image.new('RGB', (IMG_SIZE, IMG_SIZE), (0, 0, 0))
             
         if self.transform:
@@ -47,23 +60,21 @@ class TestDataset(Dataset):
 
 # --- 2. Load Model ---
 def load_model(model_path):
-    print(f"Loading model from {model_path}...")
+    logger.info(f"Loading model from {model_path}...")
     
-    # Initialize model architecture
     weights = EfficientNet_B0_Weights.DEFAULT
     model = models.efficientnet_b0(weights=weights)
     
-    # Change classifier to match training (1 output node)
     in_features = model.classifier[1].in_features
     model.classifier[1] = nn.Linear(in_features, 1)
     
-    # Load weights
     try:
         state_dict = torch.load(model_path, map_location=DEVICE)
         model.load_state_dict(state_dict)
+        logger.info("Model weights loaded successfully.")
     except FileNotFoundError:
-        print(f"❌ Error: Model file '{model_path}' not found!")
-        print("   Make sure you are in the correct folder or trained the model successfully.")
+        logger.error(f"Error: Model file '{model_path}' not found!")
+        logger.error("   Make sure you are in the correct folder or trained the model successfully.")
         exit()
         
     model.to(DEVICE)
@@ -72,27 +83,27 @@ def load_model(model_path):
 
 # --- 3. Main Prediction Loop ---
 def make_predictions():
+    logger.info(f"Starting Prediction Run. Log file: {LOG_FILE}")
+
     # 1. Load CSV
     if not os.path.exists(TEST_CSV):
-        print(f"❌ Error: {TEST_CSV} not found!")
+        logger.error(f"Error: {TEST_CSV} not found!")
         return
 
     df = pd.read_csv(TEST_CSV)
-    print(f"Found {len(df)} test entries in {TEST_CSV}.")
+    logger.info(f"Found {len(df)} test entries in {TEST_CSV}.")
 
     # 2. Check for Image Folder
-    # The first entry looks like 'test_data_v2/filename.jpg'
     first_path = df.iloc[0]['id']
-    folder_name = os.path.dirname(first_path) # Extracts 'test_data_v2'
+    folder_name = os.path.dirname(first_path)
     
     if not os.path.exists(folder_name):
-        print(f"\n❌ CRITICAL ERROR: Folder '{folder_name}' not found!")
-        print(f"   The CSV expects images to be in a folder named: {folder_name}")
-        print(f"   Current directory contains: {[d for d in os.listdir() if os.path.isdir(d)]}")
-        print("   -> Please rename your test image folder to match or move it here.\n")
+        logger.error(f"CRITICAL ERROR: Folder '{folder_name}' not found!")
+        logger.error(f"   The CSV expects images to be in a folder named: {folder_name}")
+        logger.error(f"   Current directory contains: {[d for d in os.listdir() if os.path.isdir(d)]}")
         return
     else:
-        print(f"✅ Found image folder: {folder_name}")
+        logger.info(f"Found image folder: {folder_name}")
 
     # 3. Setup Data Loader
     test_transforms = transforms.Compose([
@@ -110,22 +121,19 @@ def make_predictions():
     predictions = []
     ids = []
 
-    print(f"Starting predictions on {DEVICE}...")
+    logger.info(f"Starting batch predictions on {DEVICE}...")
+    
     with torch.no_grad():
-        for images, img_ids in tqdm(test_loader):
+        for images, img_ids in tqdm(test_loader, desc="Predicting"):
             images = images.to(DEVICE)
-            
-            # Forward pass
             outputs = model(images)
-            
-            # Convert logits to probability (0 to 1)
             probs = torch.sigmoid(outputs)
-            
-            # Convert to class (0 or 1)
             preds = (probs > 0.5).float().cpu().numpy()
             
             predictions.extend(preds.flatten().astype(int))
             ids.extend(img_ids)
+
+    logger.info("Prediction loop complete.")
 
     # 5. Save Submission
     submission_df = pd.DataFrame({
@@ -134,9 +142,12 @@ def make_predictions():
     })
     
     submission_df.to_csv(OUTPUT_FILE, index=False)
-    print(f"\n✅ Success! Submission saved to: {os.path.abspath(OUTPUT_FILE)}")
-    print("Top 5 rows:")
-    print(submission_df.head())
+    
+    abs_path = os.path.abspath(OUTPUT_FILE)
+    logger.info(f"Success! Submission saved to: {abs_path}")
+    
+    logger.info("Top 5 rows of submission:")
+    logger.info("\n" + submission_df.head().to_string())
 
 if __name__ == "__main__":
     make_predictions()

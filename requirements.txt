@@ -1,8 +1,10 @@
 kagglehub
 pandas
-torch
-torchvision
+# torch
+# torchvision
 scikit-learn
 pillow
 tqdm
+logging
+datetime
 ## pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124

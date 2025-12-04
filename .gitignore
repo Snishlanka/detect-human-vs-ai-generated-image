@@ -22,6 +22,8 @@ train.csv
 # Logs
 logs/
 *.log
+training_log*.txt
+prediction_log*.txt
 
 # OS
 .DS_Store
